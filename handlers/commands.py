@@ -4,7 +4,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from db.models import User, SearchSettings, UserVacancy, Vacancy, LLMSettings
+from db.models import User, SearchSettings, UserVacancy, Vacancy
 import json
 
 router = Router()
@@ -25,40 +25,6 @@ class SearchSettingsStates(StatesGroup):
     waiting_for_employment = State()
     waiting_for_experience = State()
     waiting_for_company = State()
-
-class LLMConfigStates(StatesGroup):
-    waiting_for_base_url = State()
-    waiting_for_api_key = State()
-    waiting_for_model = State()
-
-# ========== КОМАНДА ОЧИСТКИ ТЕСТОВЫХ ДАННЫХ ==========
-
-@router.message(F.text == "/clear_test_data")
-async def cmd_clear_test_data(message: Message, session: AsyncSession):
-    """Очистка тестовых данных из базы"""
-    try:
-        # Удаляем тестовые вакансии
-        result = await session.execute(
-            select(Vacancy).where(Vacancy.hh_id.like("test_%"))
-        )
-        test_vacancies = result.scalars().all()
-        
-        deleted_count = 0
-        for vacancy in test_vacancies:
-            # Сначала удаляем связи в UserVacancy
-            await session.execute(
-                UserVacancy.__table__.delete().where(UserVacancy.vacancy_id == vacancy.id)
-            )
-            # Затем удаляем саму вакансию
-            await session.delete(vacancy)
-            deleted_count += 1
-        
-        await session.commit()
-        await message.reply(f"✅ Удалено {deleted_count} тестовых вакансий")
-        
-    except Exception as e:
-        await session.rollback()
-        await message.reply(f"❌ Ошибка при очистке: {e}")
 
 # ========== РЕГИСТРАЦИЯ ==========
 
@@ -275,7 +241,7 @@ async def process_search_company(callback: CallbackQuery, state: FSMContext, ses
     company_type = company_mapping.get(callback.data, "any")
     await state.update_data(company_type=company_type)
     
-    # Сохраняем настройки поиска с ПРАВИЛЬНЫМИ названиями полей
+    # Сохраняем настройки поиска
     data = await state.get_data()
     telegram_id = callback.from_user.id
     
@@ -289,10 +255,10 @@ async def process_search_company(callback: CallbackQuery, state: FSMContext, ses
         await callback.answer()
         return
 
-    # Преобразуем данные для сохранения в JSON поля согласно модели
-    metro_stations = []  # Пока пустой список станций
+    # Преобразуем данные для сохранения
+    metro_stations = []
     
-    # Создаем company_filters в зависимости от выбора
+    # Создаем company_filters
     company_filters = {}
     if company_type == "size":
         company_filters = {"size": ["small", "medium", "large"]}
@@ -304,7 +270,7 @@ async def process_search_company(callback: CallbackQuery, state: FSMContext, ses
         company_filters = {"type": "any"}
     
     search_settings = SearchSettings(
-        user_id=user.id,  # Используем ID пользователя из БД
+        user_id=user.id,
         position=data['position'],
         city=data['city'],
         min_salary=data.get('min_salary', 0),
@@ -317,6 +283,55 @@ async def process_search_company(callback: CallbackQuery, state: FSMContext, ses
     
     session.add(search_settings)
     await session.commit()
+    
+    # Запускаем поиск вакансий
+    search_message = ""
+    try:
+        from services.hh_service import search_vacancies
+        
+        await callback.message.edit_text("✅ Настройки сохранены! 🔍 Ищу вакансии на HH.ru...")
+        
+        # Ищем вакансии
+        vacancies_data = await search_vacancies(search_settings)
+        
+        if vacancies_data:
+            saved_count = 0
+            for vacancy_data in vacancies_data:
+                # Проверяем, нет ли уже такой вакансии
+                existing_vacancy = await session.execute(
+                    select(Vacancy).where(Vacancy.hh_id == vacancy_data['hh_id'])
+                )
+                existing_vacancy = existing_vacancy.scalar_one_or_none()
+                
+                if not existing_vacancy:
+                    # Создаем новую вакансию
+                    vacancy = Vacancy(
+                        hh_id=vacancy_data['hh_id'],
+                        title=vacancy_data['title'],
+                        company=vacancy_data['company'],
+                        city=vacancy_data['city'],
+                        salary=vacancy_data['salary'],
+                        url=vacancy_data['url'],
+                        description=vacancy_data['description']
+                    )
+                    session.add(vacancy)
+                    await session.flush()
+                    
+                    # Связываем с пользователем
+                    user_vacancy = UserVacancy(
+                        user_id=user.id,
+                        vacancy_id=vacancy.id
+                    )
+                    session.add(user_vacancy)
+                    saved_count += 1
+            
+            await session.commit()
+            search_message = f"✅ Найдено {len(vacancies_data)} вакансий, сохранено {saved_count} новых!"
+        else:
+            search_message = "❌ По вашему запросу вакансий не найдено. Попробуйте изменить критерии."
+            
+    except Exception as e:
+        search_message = f"❌ Ошибка при поиске вакансий: {str(e)}"
     
     # Показываем сводку настроек
     summary = f"""
@@ -332,66 +347,14 @@ async def process_search_company(callback: CallbackQuery, state: FSMContext, ses
 • Опыт: {data.get('experience', 'любой')}
 • Компании: {data.get('company_type', 'любые')}
 
-Используйте /vacancies для поиска вакансий!
+{search_message}
+
+Используйте /vacancies для просмотра вакансий!
     """
     
     await callback.message.edit_text(summary)
     await state.clear()
     await callback.answer()
-
-# ========== LLM НАСТРОЙКИ ==========
-
-@router.message(F.text == "/set_llm")
-async def cmd_set_llm(message: Message, state: FSMContext, session: AsyncSession):
-    telegram_id = message.from_user.id
-    user = await session.execute(select(User).where(User.telegram_id == telegram_id))
-    user = user.scalar_one_or_none()
-
-    if not user:
-        await message.reply("Сначала зарегистрируйтесь с помощью /start")
-        return
-
-    await message.reply("Настройка LLM.\nВведите Base URL (например, https://api.openai.com/v1):")
-    await state.set_state(LLMConfigStates.waiting_for_base_url)
-
-@router.message(LLMConfigStates.waiting_for_base_url)
-async def process_base_url(message: Message, state: FSMContext, session: AsyncSession):
-    await state.update_data(base_url=message.text)
-    await message.reply("Введите API Key:")
-    await state.set_state(LLMConfigStates.waiting_for_api_key)
-
-@router.message(LLMConfigStates.waiting_for_api_key)
-async def process_api_key(message: Message, state: FSMContext, session: AsyncSession):
-    await state.update_data(api_key=message.text)
-    await message.reply("Введите название модели (например, gpt-3.5-turbo):")
-    await state.set_state(LLMConfigStates.waiting_for_model)
-
-@router.message(LLMConfigStates.waiting_for_model)
-async def process_model(message: Message, state: FSMContext, session: AsyncSession):
-    data = await state.get_data()
-    telegram_id = message.from_user.id
-    
-    # Получаем пользователя
-    user = await session.execute(select(User).where(User.telegram_id == telegram_id))
-    user = user.scalar_one_or_none()
-    
-    if not user:
-        await message.reply("❌ Ошибка: пользователь не найден")
-        await state.clear()
-        return
-
-    # Сохраняем настройки LLM
-    llm_settings = LLMSettings(
-        user_id=user.id,
-        base_url=data['base_url'],
-        api_key=data['api_key'],
-        model=message.text
-    )
-    session.add(llm_settings)
-    await session.commit()
-    
-    await message.reply(f"✅ Настройки LLM сохранены!\nURL: {data['base_url']}\nМодель: {message.text}")
-    await state.clear()
 
 # ========== ВАКАНСИИ ==========
 
@@ -407,14 +370,10 @@ async def cmd_vacancies(message: Message, session: AsyncSession):
         await message.reply("Сначала зарегистрируйтесь с помощью /start")
         return
     
-    # Получаем только НЕ тестовые вакансии пользователя
+    # Получаем вакансии пользователя
     user_vacancies = await session.execute(
         select(UserVacancy)
-        .join(Vacancy, UserVacancy.vacancy_id == Vacancy.id)
-        .where(
-            UserVacancy.user_id == user.id,
-            ~Vacancy.hh_id.like("test_%")  # Исключаем тестовые вакансии
-        )
+        .where(UserVacancy.user_id == user.id)
         .order_by(UserVacancy.sent_at.desc())
         .limit(10)
     )
@@ -424,15 +383,10 @@ async def cmd_vacancies(message: Message, session: AsyncSession):
         await message.reply("🤷‍♂️ Пока нет подходящих вакансий по вашим настройкам.\n\nПопробуйте:\n• Изменить настройки поиска /search_settings\n• Расширить критерии поиска\n• Проверить позже - новые вакансии появляются каждый день!")
         return
 
-    vacancy_count = 0
     for uv in user_vacancies:
         vacancy = await session.get(Vacancy, uv.vacancy_id)
-        if vacancy and not vacancy.hh_id.startswith("test_"):  # Дополнительная проверка
+        if vacancy:
             await show_vacancy_with_buttons(message, vacancy)
-            vacancy_count += 1
-    
-    if vacancy_count == 0:
-        await message.reply("🤷‍♂️ Пока нет подходящих вакансий по вашим настройкам.")
 
 async def show_vacancy_with_buttons(message: Message, vacancy: Vacancy):
     """Показывает вакансию с кнопками"""

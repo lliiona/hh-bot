@@ -2,6 +2,7 @@ import asyncio
 import logging
 from aiogram import Bot, Dispatcher, BaseMiddleware
 from aiogram.client.default import DefaultBotProperties
+from aiogram.fsm.storage.memory import MemoryStorage
 from config import config
 from db.connection import create_tables, get_session
 from handlers import register_handlers
@@ -20,14 +21,13 @@ async def main():
     config.validate()
 
     bot = Bot(token=config.BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
-    dp = Dispatcher()
+    dp = Dispatcher(storage=MemoryStorage())  # Добавьте storage
 
     # Создать таблицы
     await create_tables()
 
-    # Middleware для сессии
-    dp.message.middleware(DBSessionMiddleware())
-    dp.callback_query.middleware(DBSessionMiddleware())
+    # Middleware для сессии - ИСПРАВЛЕННЫЙ СПОСОБ
+    dp.update.outer_middleware(DBSessionMiddleware())
 
     # Регистрировать handlers
     register_handlers(dp)
