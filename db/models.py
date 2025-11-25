@@ -15,7 +15,6 @@ class User(Base):
     desired_position = Column(String(255))
     skills = Column(Text)
     base_resume = Column(Text)
-    created_at = Column(DateTime, default=datetime.utcnow)
 
 class SearchSettings(Base):
     __tablename__ = 'search_settings'
@@ -55,7 +54,6 @@ class Vacancy(Base):
     salary = Column(String(255))
     url = Column(String(500))
     description = Column(Text)
-    created_at = Column(DateTime, default=datetime.utcnow)
 
 class UserVacancy(Base):
     __tablename__ = 'user_vacancies'
