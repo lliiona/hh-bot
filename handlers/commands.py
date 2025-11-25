@@ -324,16 +324,20 @@ async def process_search_company(callback: CallbackQuery, state: FSMContext, ses
         vacancies_data = await search_vacancies(search_settings)
         
         if vacancies_data:
+            # Очищаем старые вакансии пользователя (опционально)
+            await session.execute(
+                UserVacancy.__table__.delete().where(UserVacancy.user_id == user.id)
+            )
+            
             saved_count = 0
             for vacancy_data in vacancies_data:
-                # Проверяем, нет ли уже такой вакансии
+                # Находим или создаем вакансию
                 existing_vacancy = await session.execute(
                     select(Vacancy).where(Vacancy.hh_id == vacancy_data['hh_id'])
                 )
                 existing_vacancy = existing_vacancy.scalar_one_or_none()
                 
                 if not existing_vacancy:
-                    # Создаем новую вакансию
                     vacancy = Vacancy(
                         hh_id=vacancy_data['hh_id'],
                         title=vacancy_data['title'],
@@ -345,17 +349,20 @@ async def process_search_company(callback: CallbackQuery, state: FSMContext, ses
                     )
                     session.add(vacancy)
                     await session.flush()
-                    
-                    # Связываем с пользователем
-                    user_vacancy = UserVacancy(
-                        user_id=user.id,
-                        vacancy_id=vacancy.id
-                    )
-                    session.add(user_vacancy)
-                    saved_count += 1
+                    vacancy_id = vacancy.id
+                else:
+                    vacancy_id = existing_vacancy.id
+                
+                # Всегда связываем с пользователем (даже если уже была связана)
+                user_vacancy = UserVacancy(
+                    user_id=user.id,
+                    vacancy_id=vacancy_id
+                )
+                session.add(user_vacancy)
+                saved_count += 1
             
             await session.commit()
-            search_message = f"✅ Найдено {len(vacancies_data)} вакансий, сохранено {saved_count} новых!"
+            search_message = f"✅ Найдено {len(vacancies_data)} вакансий! Используйте /vacancies для просмотра."
         else:
             search_message = "❌ По вашему запросу вакансий не найдено. Попробуйте изменить критерии."
             

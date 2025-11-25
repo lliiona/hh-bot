@@ -12,31 +12,40 @@ async def generate_resume(user: User, vacancy: Vacancy, llm_settings: Optional[L
         raise ValueError("LLM settings not configured")
 
     prompt = f"""
-Создай профессиональное резюме, адаптированное под конкретную вакансию.
+Создай подробное профессиональное резюме, максимально адаптированное под конкретную вакансию.
 
 ИНФОРМАЦИЯ О КАНДИДАТЕ:
-- ФИО: {user.name}
-- Город: {user.city} 
-- Желаемая должность: {user.desired_position}
-- Ключевые навыки: {user.skills}
-- Опыт работы: {user.base_resume}
+👤 ФИО: {user.name}
+📍 Город: {user.city}
+🎯 Желаемая должность: {user.desired_position}
+🛠️ Ключевые навыки: {user.skills}
+📋 Опыт работы: {user.base_resume}
 
 ИНФОРМАЦИЯ О ВАКАНСИИ:
-- Должность: {vacancy.title}
-- Компания: {vacancy.company}
-- Город: {getattr(vacancy, 'city', 'Не указан')}
-- Описание: {vacancy.description}
-- Зарплата: {getattr(vacancy, 'salary', 'Не указана')}
+💼 Должность: {vacancy.title}
+🏢 Компания: {vacancy.company}
+📍 Город: {vacancy.city}
+💰 Зарплата: {vacancy.salary}
+📝 Описание вакансии: {vacancy.description}
 
 ТРЕБОВАНИЯ К РЕЗЮМЕ:
-1. Адаптируй резюме под требования вакансии
-2. Выдели наиболее релевантные навыки кандидата
-3. Структурируй информацию профессионально
-4. Сделай акцент на соответствие требованиям вакансии
-5. Используй деловой стиль
-6. Укажи контактную информацию (город, возможный способ связи)
+1. Тщательно проанализируй описание вакансии и выдели ключевые требования
+2. Адаптируй резюме под конкретные требования вакансии
+3. Выдели наиболее релевантные навыки кандидата для этой должности
+4. Подчеркни опыт, который соответствует требованиям вакансии
+5. Структурируй информацию в профессиональном формате
+6. Используй ключевые слова из описания вакансии
+7. Сделай акцент на достижениях и результатах
 
-Формат: профессиональное резюме с разделами (Контакты, Опыт работы, Навыки, Образование и т.д.).
+СТРУКТУРА РЕЗЮМЕ:
+1. Контактная информация и личные данные
+2. Цель/Профессиональное резюме (адаптированная под вакансию)
+3. Ключевые навыки (сгруппированные по релевантности)
+4. Опыт работы (с акцентом на соответствующий опыт)
+5. Образование (если уместно)
+6. Дополнительная информация (сертификаты, проекты и т.д.)
+
+Важно: сделай резюме максимально релевантным для конкретной вакансии в компании {vacancy.company}.
 """
 
     messages = [{"role": "user", "content": prompt}]
@@ -44,38 +53,23 @@ async def generate_resume(user: User, vacancy: Vacancy, llm_settings: Optional[L
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                f"{base_url.rstrip('/')}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json"
-                },
+                f"{base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
                 json={
                     "model": model, 
                     "messages": messages,
-                    "max_tokens": 2000,
-                    "temperature": 0.7,
-                    "stream": False
+                    "max_tokens": 3000,
+                    "temperature": 0.7
                 },
                 timeout=60.0
             )
             
             if response.status_code != 200:
-                error_detail = response.text
-                try:
-                    error_data = response.json()
-                    error_detail = error_data.get('error', {}).get('message', error_detail)
-                except:
-                    pass
-                raise Exception(f"LLM API error: {response.status_code} - {error_detail}")
+                raise Exception(f"LLM API error: {response.status_code} - {response.text}")
                 
             data = response.json()
-            if 'choices' not in data or not data['choices']:
-                raise Exception("Пустой ответ от LLM API")
-                
-            return data['choices'][0]['message']['content'].strip()
+            return data['choices'][0]['message']['content']
             
-    except httpx.TimeoutException:
-        raise Exception("Таймаут при подключении к LLM API")
     except Exception as e:
         raise Exception(f"Ошибка при генерации резюме: {str(e)}")
 
@@ -88,33 +82,42 @@ async def generate_cover_letter(user: User, vacancy: Vacancy, llm_settings: Opti
         raise ValueError("LLM settings not configured")
 
     prompt = f"""
-Напиши сопроводительное письмо для отклика на вакансию.
+Напиши подробное персонализированное сопроводительное письмо для отклика на вакансию.
 
 ИНФОРМАЦИЯ О КАНДИДАТЕ:
-- Имя: {user.name}
-- Город: {user.city}
-- Желаемая должность: {user.desired_position}
-- Навыки: {user.skills}
-- Опыт: {user.base_resume}
+👤 Имя: {user.name}
+📍 Город: {user.city}
+🎯 Желаемая должность: {user.desired_position}
+🛠️ Навыки: {user.skills}
+📋 Опыт: {user.base_resume}
 
 ИНФОРМАЦИЯ О ВАКАНСИИ:
-- Должность: {vacancy.title}
-- Компания: {vacancy.company}
-- Город: {getattr(vacancy, 'city', 'Не указан')}
-- Описание: {vacancy.description}
-- Зарплата: {getattr(vacancy, 'salary', 'Не указана')}
+💼 Должность: {vacancy.title}
+🏢 Компания: {vacancy.company}
+📍 Город: {vacancy.city}
+💰 Зарплата: {vacancy.salary}
+📝 Описание: {vacancy.description}
 
 ТРЕБОВАНИЯ К ПИСЬМУ:
-1. Персонализированное обращение к компании
-2. Обоснование интереса к вакансии
-3. Подчеркивание релевантного опыта и навыков
-4. Увяжи опыт кандидата с требованиями вакансии
-5. Профессиональный деловой стиль
-6. Призыв к дальнейшему общению
-7. Укажи готовность к переезду если город вакансии отличается
+1. Тщательно проанализируй описание вакансии и компанию
+2. Персонализируй обращение к компании {vacancy.company}
+3. Обоснуй интерес именно к этой вакансии и компании
+4. Подчеркни релевантный опыт и навыки для требований вакансии
+5. Приведи конкретные примеры из опыта кандидата
+6. Объясни почему кандидат подходит для этой должности
+7. Продемонстрируй энтузиазм по поводу работы в компании
+8. Включи призыв к действию (предложи собеседование/встречу)
 
-Формат: деловое письмо с приветствием, основной частью и подписью.
-Длина: 1-2 абзаца, информативно и по делу.
+СТРУКТУРА ПИСЬМА:
+1. Персонализированное приветствие
+2. Введение с указанием вакансии и выражения интереса
+3. Основная часть с обоснованием соответствия требованиям
+4. Конкретные примеры релевантного опыта и навыков
+5. Объяснение почему кандидат хочет работать в этой компании
+6. Заключение с призывом к действию
+7. Профессиональная подпись
+
+Тон: профессиональный, уверенный, но не самонадеянный.
 """
 
     messages = [{"role": "user", "content": prompt}]
@@ -122,37 +125,22 @@ async def generate_cover_letter(user: User, vacancy: Vacancy, llm_settings: Opti
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                f"{base_url.rstrip('/')}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json"
-                },
+                f"{base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
                 json={
                     "model": model, 
                     "messages": messages,
-                    "max_tokens": 1500,
-                    "temperature": 0.7,
-                    "stream": False
+                    "max_tokens": 2500,
+                    "temperature": 0.7
                 },
                 timeout=60.0
             )
             
             if response.status_code != 200:
-                error_detail = response.text
-                try:
-                    error_data = response.json()
-                    error_detail = error_data.get('error', {}).get('message', error_detail)
-                except:
-                    pass
-                raise Exception(f"LLM API error: {response.status_code} - {error_detail}")
+                raise Exception(f"LLM API error: {response.status_code} - {response.text}")
                 
             data = response.json()
-            if 'choices' not in data or not data['choices']:
-                raise Exception("Пустой ответ от LLM API")
-                
-            return data['choices'][0]['message']['content'].strip()
+            return data['choices'][0]['message']['content']
             
-    except httpx.TimeoutException:
-        raise Exception("Таймаут при подключении к LLM API")
     except Exception as e:
         raise Exception(f"Ошибка при генерации письма: {str(e)}")
